@@ -1,10 +1,6 @@
 {{ config(materialized='table') }}
 
--- This model aggregates line-item grain (silver_orders) up to order grain,
--- per the doc's "Aggregate order items to order grain" requirement.
--- Order-level fields (shipping_cost, tax_amount, order_discount) are
--- correctly applied ONCE per order here, not per line item, since applying
--- them at line grain would double-count them across multi-item orders.
+
 
 with order_lines as (
 
@@ -117,7 +113,7 @@ select
     total_cost,
     total_discount,
 
-    -- Full doc formula, applied once per order:
+    
     -- profit_amount = (line_revenue * (1 - order.discount_amount)) - line_cost - shipping_cost - tax_amount
     round(
         (line_revenue * (1 - (order_discount / 100)))

@@ -1,13 +1,10 @@
 {{ config(materialized='table', schema='GOLD') }}
 
--- NOTE: roi here is the source-provided figure carried through from Silver
--- (roi_calculation_raw), NOT the validated, sales-attribution-based ROI.
--- That validated ROI is calculated separately in FACT_MarketingPerformance,
--- per the doc's ROI validation note.
+
 
 select
 
-    row_number() over (order by campaign_id) as campaign_key,
+    {{ dbt_utils.generate_surrogate_key(['campaign_id']) }} as campaign_key,
 
     campaign_id,
     campaign_name,

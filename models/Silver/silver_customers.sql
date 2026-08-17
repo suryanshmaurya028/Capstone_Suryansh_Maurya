@@ -1,15 +1,8 @@
-{{ config(materialized='table') }}
+{{ config(materialized='table', schema='SILVER') }}
 
-with customer_flattened as (
+with src_customer as (
 
-    select
-        value as customer,
-        _loaded_at,
-        _source_file,
-        _batch_id
-
-    from {{ ref('snp_br_customers') }},
-    lateral flatten(input => raw_data:customers_data)
+    select * from {{ ref('snp_customer') }} where dbt_valid_to is null
 
 ),
 
@@ -17,139 +10,97 @@ customers_cleaned as (
 
     select
 
-        customer,
+        customer_id,
+        first_name,
+        last_name,
 
         coalesce(
-            try_to_date(customer:birth_date::string,'YYYY-MM-DD'),
-            try_to_date(customer:birth_date::string,'MM-DD-YYYY'),
-            try_to_date(customer:birth_date::string,'DD-MM-YYYY'),
-            try_to_date(customer:birth_date::string,'YYYY/MM/DD'),
-            try_to_date(customer:birth_date::string,'MM/DD/YYYY'),
-            try_to_date(customer:birth_date::string,'DD/MM/YYYY')
+            try_to_date(birth_date_raw,'YYYY-MM-DD'),
+            try_to_date(birth_date_raw,'MM-DD-YYYY'),
+            try_to_date(birth_date_raw,'DD-MM-YYYY'),
+            try_to_date(birth_date_raw,'YYYY/MM/DD'),
+            try_to_date(birth_date_raw,'MM/DD/YYYY'),
+            try_to_date(birth_date_raw,'DD/MM/YYYY')
         ) as birth_date,
 
+        email,
+        phone,
+        address_street,
+        address_city,
+        address_state,
+        address_zip_code,
+        address_country,
+        income_bracket,
+        occupation,
+        loyalty_tier,
+        marketing_opt_in,
+        preferred_communication,
+        preferred_payment_method,
+        try_to_date(registration_date) as registration_date,
+        try_to_date(last_purchase_date) as last_purchase_date,
+        total_purchases,
+        total_spend,
+        last_modified_date,
         _loaded_at,
-        _source_file,
-        _batch_id
+        _source_file
 
-    from customer_flattened
+    from src_customer
 
 )
 
 select
 
-    customer:customer_id::string as customer_id,
+    customer_id,
 
-    initcap(trim(customer:first_name::string)) as first_name,
+    initcap(trim(first_name)) as first_name,
+    initcap(trim(last_name)) as last_name,
 
-    initcap(trim(customer:last_name::string)) as last_name,
-
-    concat(
-        initcap(trim(customer:first_name::string)),
-        ' ',
-        initcap(trim(customer:last_name::string))
-    ) as full_name,
+    concat(initcap(trim(first_name)), ' ', initcap(trim(last_name))) as full_name,
 
     birth_date,
 
-    coalesce(
-        datediff(
-            year,
-            birth_date,
-            current_date()
-        ),
-        0
-    ) as customer_age,
+    coalesce(datediff(year, birth_date, current_date()), 0) as customer_age,
 
-    -- Uses the same datediff(year, ...) method as customer_age above,
-    -- so age and segment never disagree at birthday edge cases.
     case
-        when datediff(year, birth_date, current_date()) between 18 and 35
-            then 'Young'
-
-        when datediff(year, birth_date, current_date()) between 36 and 55
-            then 'Middle-aged'
-
-        when datediff(year, birth_date, current_date()) >= 56
-            then 'Senior'
-
+        when datediff(year, birth_date, current_date()) between 18 and 35 then 'Young'
+        when datediff(year, birth_date, current_date()) between 36 and 55 then 'Middle-aged'
+        when datediff(year, birth_date, current_date()) >= 56 then 'Senior'
         else 'Unknown'
     end as customer_segment,
 
-    lower(trim(customer:email::string)) as email,
+    lower(trim(email)) as email,
 
     case
-        when regexp_like(
-            lower(trim(customer:email::string)),
-            '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
-        )
-        then true
-        else false
+        when regexp_like(lower(trim(email)), '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
+        then true else false
     end as valid_email_flag,
 
-    regexp_replace(
-        customer:phone::string,
-        '[^0-9]',
-        ''
-    ) as phone_number,
+    regexp_replace(phone, '[^0-9]', '') as phone_number,
 
     case
-        when length(
-            regexp_replace(customer:phone::string,'[^0-9]','')
-        ) = 10
-        then true
-        else false
+        when length(regexp_replace(phone, '[^0-9]', '')) = 10
+        then true else false
     end as valid_phone_flag,
 
-    initcap(trim(customer:occupation::string)) as occupation,
+    initcap(trim(occupation)) as occupation,
+    upper(trim(loyalty_tier)) as loyalty_tier,
+    upper(trim(income_bracket)) as income_bracket,
+    marketing_opt_in,
+    initcap(trim(preferred_communication)) as preferred_communication,
+    initcap(trim(preferred_payment_method)) as preferred_payment_method,
+    registration_date,
+    last_purchase_date,
+    last_modified_date,
+    total_purchases,
+    total_spend,
 
-    upper(trim(customer:loyalty_tier::string)) as loyalty_tier,
-
-    upper(trim(customer:income_bracket::string)) as income_bracket,
-
-    customer:marketing_opt_in::boolean as marketing_opt_in,
-
-    initcap(trim(customer:preferred_communication::string))
-        as preferred_communication,
-
-    initcap(trim(customer:preferred_payment_method::string))
-        as preferred_payment_method,
-
-    try_to_date(customer:registration_date::string)
-        as registration_date,
-
-    try_to_date(customer:last_purchase_date::string)
-        as last_purchase_date,
-
-    try_to_date(customer:last_modified_date::string)
-        as last_modified_date,
-
-    customer:total_purchases::number as total_purchases,
-
-    customer:total_spend::number(18,2) as total_spend,
-
-    initcap(trim(customer:address.street::string))
-        as street,
-
-    initcap(trim(customer:address.city::string))
-        as city,
-
-    upper(trim(customer:address.state::string))
-        as state,
-
-    upper(trim(customer:address.country::string))
-        as country,
-
-    customer:address.zip_code::string
-        as zip_code,
+    initcap(trim(address_street)) as street,
+    initcap(trim(address_city)) as city,
+    upper(trim(address_state)) as state,
+    upper(trim(address_country)) as country,
+    address_zip_code as zip_code,
 
     _loaded_at,
-    _source_file,
-    _batch_id
+    _source_file
 
 from customers_cleaned
-
-qualify row_number() over (
-    partition by customer:customer_id::string
-    order by try_to_date(customer:last_modified_date::string) desc
-) = 1

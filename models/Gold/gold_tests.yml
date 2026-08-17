@@ -1,0 +1,114 @@
+version: 2
+
+models:
+
+  - name: dim_product
+    columns:
+      - name: product_key
+        tests:
+          - unique
+          - not_null
+      - name: product_id
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_supplier
+    columns:
+      - name: supplier_key
+        tests:
+          - unique
+          - not_null
+      - name: supplier_id
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_store
+    columns:
+      - name: store_key
+        tests:
+          - unique
+          - not_null
+      - name: store_id
+        tests:
+          - unique
+          - not_null
+      - name: store_size_category
+        tests:
+          - accepted_values:
+              values: ['Small', 'Medium', 'Large', 'Unknown']
+
+  - name: dim_marketingcampaign
+    columns:
+      - name: campaign_key
+        tests:
+          - unique
+          - not_null
+      - name: campaign_id
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_date
+    columns:
+      - name: date_key
+        tests:
+          - unique
+          - not_null
+      - name: full_date
+        tests:
+          - unique
+          - not_null
+
+  - name: fact_inventory
+    columns:
+      - name: inventory_key
+        tests:
+          - unique
+          - not_null
+      - name: product_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_product')
+              field: product_key
+      - name: supplier_key
+        tests:
+          - relationships:
+              to: ref('dim_supplier')
+              field: supplier_key
+      - name: store_key
+        tests:
+          # NOTE: no not_null test here — store_key is legitimately NULL for
+          # the ~96.7% of product-dates with zero sales anywhere that day,
+          # per the documented grain limitation (real joins only, no cross
+          # join). relationships test still applies to non-null values.
+          - relationships:
+              to: ref('dim_store')
+              field: store_key
+      - name: date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+
+  - name: fact_marketingperformance
+    columns:
+      - name: marketing_performance_key
+        tests:
+          - unique
+          - not_null
+      - name: campaign_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_marketingcampaign')
+              field: campaign_key
+      - name: date_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key

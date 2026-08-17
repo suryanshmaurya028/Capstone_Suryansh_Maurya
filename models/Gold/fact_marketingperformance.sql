@@ -1,20 +1,6 @@
 {{ config(materialized='table', schema='GOLD') }}
 
--- ============================================================================
--- GRAIN: one row per campaign per date, declared explicitly per doc.
---
--- ATTRIBUTION RULE (required by doc — without this, metrics aren't
--- reproducible): an order is attributed to a campaign if the order's
--- campaign_id directly matches the campaign, AND the order's date falls
--- within the campaign's start_date/end_date window. Each order carries at
--- most one campaign_id in the source data, so this is a direct-match
--- attribution rather than a last-touch model (there is nothing to break a
--- tie between multiple touches, since only one campaign_id exists per order).
---
--- "New customer" = a customer whose order falls in the campaign window AND
--- who had NO orders anywhere (any campaign or none) before the campaign's
--- start_date, per the doc's literal formula.
--- ============================================================================
+
 
 with campaigns as (
 
@@ -28,7 +14,7 @@ with campaigns as (
 
 ),
 
--- One row per campaign per date within its active window
+
 campaign_date_spine as (
 
     select
@@ -44,8 +30,7 @@ campaign_date_spine as (
 
 ),
 
--- All orders, used both for attribution and for determining each
--- customer's true first-ever purchase date (needed for "new customer" logic)
+
 all_orders as (
 
     select
@@ -68,7 +53,7 @@ customer_first_order as (
 
 ),
 
--- Orders attributed to a campaign: direct campaign_id match, within window
+
 attributed_orders as (
 
     select
@@ -146,18 +131,13 @@ select
     total_sales_influenced,
     new_customers_acquired,
 
-    -- Repeat Purchase Rate, per doc's exact formula
+
     round(
         100.0 * repeat_purchase_customers
         / nullif(first_purchase_customers, 0),
         2
     ) as repeat_purchase_rate,
 
-    -- ROI, per doc's exact formula. NOTE: total_cost is the campaign's
-    -- overall cost (not split daily), so this reflects that day's sales
-    -- influenced against the full campaign cost — read cumulative ROI
-    -- across the campaign window for a stable, complete picture rather
-    -- than any single day in isolation.
     round(
         case
             when total_cost > 0
