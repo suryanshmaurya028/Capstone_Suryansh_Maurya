@@ -1,7 +1,8 @@
 {{ config(materialized='table', schema='GOLD') }}
 
 
-
+---- Grain: product + date, with real store attribution where sales data
+-- exists. No cross join used, per instructor guidance .
 
 with company_inventory as (
 
