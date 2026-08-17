@@ -50,5 +50,3 @@ models:
   elementary:
     +schema: "elementary"
 
-on-run-end:
-  - "{{ elementary.on_run_end() }}"
