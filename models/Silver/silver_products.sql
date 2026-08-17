@@ -1,131 +1,57 @@
-{{ config(materialized='table') }}
+{{ config(materialized='table', schema='SILVER') }}
 
-with products_flattened as (
+with src_product as (
 
-    select
-        value as product,
-        _loaded_at,
-        _source_file,
-        _batch_id
-
-    from {{ ref('snp_br_products') }},
-    lateral flatten(input => raw_data:products_data)
+    select * from {{ ref('snp_product') }} where dbt_valid_to is null
 
 )
 
 select
 
-    product:product_id::string as product_id,
+    product_id,
 
-    initcap(trim(product:name::string)) as product_name,
-
-    initcap(trim(product:brand::string)) as brand,
-
-    initcap(trim(product:category::string)) as category,
-
-    initcap(trim(product:subcategory::string)) as subcategory,
-
-    initcap(trim(product:product_line::string)) as product_line,
+    initcap(trim(name)) as product_name,
+    initcap(trim(brand)) as brand,
+    initcap(trim(category)) as category,
+    initcap(trim(subcategory)) as subcategory,
+    initcap(trim(product_line)) as product_line,
 
     concat(
-        initcap(trim(product:category::string)),
-        ' > ',
-        initcap(trim(product:subcategory::string)),
-        ' > ',
-        initcap(trim(product:product_line::string))
+        initcap(trim(category)), ' > ', initcap(trim(subcategory)), ' > ', initcap(trim(product_line))
     ) as category_hierarchy,
 
-    trim(product:short_description::string)
-        as short_description,
-
-    trim(product:technical_specs::string)
-        as technical_specs,
+    trim(short_description) as short_description,
+    trim(technical_specs) as technical_specs,
 
     concat(
-        initcap(trim(product:name::string)),
-        ' | ',
-        trim(product:short_description::string),
-        ' | ',
-        trim(product:technical_specs::string)
+        initcap(trim(name)), ' | ', trim(short_description), ' | ', trim(technical_specs)
     ) as full_product_description,
 
-    product:unit_price::number(18,2)
-        as unit_price,
-
-    product:cost_price::number(18,2)
-        as cost_price,
+    unit_price,
+    cost_price,
 
     round(
-        case
-            when product:unit_price::number > 0
-            then
-            (
-                (
-                    product:unit_price::number
-                    -
-                    product:cost_price::number
-                )
-                /
-                product:unit_price::number
-            ) * 100
-        end,
+        case when unit_price > 0
+        then ((unit_price - cost_price) / unit_price) * 100 end,
         2
     ) as profit_margin_percentage,
 
-    product:stock_quantity::number
-        as stock_quantity,
+    stock_quantity,
+    reorder_level,
 
-    product:reorder_level::number
-        as reorder_level,
+    case when stock_quantity < reorder_level then true else false end as low_stock_flag,
 
-    case
-        when product:stock_quantity::number
-             <
-             product:reorder_level::number
-        then true
-        else false
-    end as low_stock_flag,
-
-    product:supplier_id::string
-        as supplier_id,
-
-    initcap(trim(product:color::string))
-        as color,
-
-    initcap(trim(product:size::string))
-        as size,
-
-    trim(product:dimensions::string)
-        as dimensions,
-
-    trim(product:weight::string)
-        as weight,
-
-    trim(product:warranty_period::string)
-        as warranty_period,
-
-    product:is_featured::boolean
-        as is_featured,
-
-    try_to_date(product:launch_date::string)
-        as launch_date,
-
-    try_to_date(product:last_modified_date::string)
-        as last_modified_date,
+    supplier_id,
+    initcap(trim(color)) as color,
+    initcap(trim(size)) as size,
+    trim(dimensions) as dimensions,
+    trim(weight) as weight,
+    trim(warranty_period) as warranty_period,
+    is_featured,
+    try_to_date(launch_date) as launch_date,
+    last_modified_date,
 
     _loaded_at,
-    _source_file,
-    _batch_id
+    _source_file
 
-from products_flattened
-
-qualify row_number() over (
-
-    partition by product:product_id::string
-
-    order by
-        try_to_date(
-            product:last_modified_date::string
-        ) desc
-
-) = 1
+from src_product

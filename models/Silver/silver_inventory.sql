@@ -1,16 +1,6 @@
 {{ config(materialized='table') }}
 
--- CORRECTED APPROACH: the original design tried to get day-over-day stock
--- history via snp_products (a dbt snapshot on top of silver_products).
--- That doesn't work: silver_products collapses all 168 daily product files
--- down to one row per product (latest only) before a snapshot ever sees it,
--- and dbt snapshots can't retroactively backfill pre-existing history in a
--- single run anyway (they only accept one current row per key, per run).
---
--- Since the real daily history already physically exists in Bronze
--- (168 distinct product files, one per day), we compute beginning/ending
--- stock DIRECTLY from that flattened data using lag(), ordered by each
--- file's actual date extracted from the filename. No snapshot needed here.
+
 
 with products_flattened as (
 
@@ -20,10 +10,7 @@ with products_flattened as (
         value:stock_quantity::number as stock_quantity,
         value:reorder_level::number as reorder_level,
 
-        -- Extract the actual as-of date from the filename itself
-        -- (e.g. products_2024-04-05.json -> 2024-04-05), since this is the
-        -- true daily snapshot date, independent of last_modified_date
-        -- (which only changes when a record's content actually changes).
+
         try_to_date(
             regexp_substr(_source_file, '[0-9]{4}-[0-9]{2}-[0-9]{2}')
         ) as snapshot_date

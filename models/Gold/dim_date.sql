@@ -1,8 +1,6 @@
 {{ config(materialized='table', schema='GOLD') }}
 
--- Per doc build note: generated programmatically from a date spine
--- spanning the data window (2024-04-01 to 2024-09-27), not sourced from
--- transactional data, so the calendar is complete and gap-free.
+
 
 with date_spine as (
 

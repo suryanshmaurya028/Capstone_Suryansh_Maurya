@@ -1,30 +1,9 @@
 {{ config(materialized='table', schema='GOLD') }}
 
--- ============================================================================
--- GRAIN: one row per product per store per date, per doc spec.
---
--- IMPORTANT DATA LIMITATION (documented per doc's own transparency standard):
--- Source Products data has NO store-level stock breakdown — stock_quantity
--- is reported once per product, company-wide. Therefore:
---   - beginning_stock, ending_stock, purchased_quantity are COMPANY-WIDE
---     values, repeated identically across every store row for a given
---     product + date. They are NOT genuinely store-specific.
---   - sold_quantity IS genuinely store-specific, sourced directly from
---     Orders (which does carry store_id).
--- This matches the doc's own source note: "joined to sold quantity from
--- completed orders, and to DIM_Product, DIM_Store, DIM_Supplier, DIM_Date" —
--- i.e. a company-wide stock figure paired with a store-specific sales figure.
--- Stock Turnover Ratio at this grain should be read with that caveat in mind.
--- ============================================================================
 
-with active_stores as (
 
-    select store_key, store_id
-    from {{ ref('dim_store') }}
 
-),
-
-company_inventory as (
+with company_inventory as (
 
     select
         product_id,
@@ -40,30 +19,9 @@ company_inventory as (
 
 ),
 
--- Cross join: every product-date combination applies identically to every store
-product_date_store as (
-
-    select
-        ci.product_id,
-        ci.snapshot_date,
-        ci.beginning_stock,
-        ci.ending_stock,
-        ci.purchased_quantity,
-        ci.low_stock_flag,
-        ci.stale_snapshot_flag,
-        ci.negative_balance_flag,
-        s.store_id,
-        s.store_key
-
-    from company_inventory ci
-    cross join active_stores s
-
-),
-
--- Genuinely store-specific: sold quantity per product per store per day,
--- completed orders only, per doc
 sold_by_store as (
 
+    
     select
         product_id,
         store_id,
@@ -76,55 +34,103 @@ sold_by_store as (
 
 ),
 
-joined as (
+
+base_with_sales as (
 
     select
 
-        pds.product_id,
-        pds.store_id,
-        pds.snapshot_date,
-        pds.beginning_stock,
-        pds.ending_stock,
-        pds.purchased_quantity,
-        pds.low_stock_flag,
-        pds.stale_snapshot_flag,
-        pds.negative_balance_flag,
-        pds.store_key,
+        ci.product_id,
+        ci.snapshot_date,
+        ci.beginning_stock,
+        ci.ending_stock,
+        ci.purchased_quantity,
+        ci.low_stock_flag,
+        ci.stale_snapshot_flag,
+        ci.negative_balance_flag,
 
-        coalesce(sb.sold_quantity, 0) as sold_quantity,
+        sbs.store_id,
+        coalesce(sbs.sold_quantity, 0) as sold_quantity
 
-        p.product_key,
-        p.supplier_id,
-        p.cost_price,
-        sup.supplier_key,
-        d.date_key
+    from company_inventory ci
 
-    from product_date_store pds
-
-    left join sold_by_store sb
-        on pds.product_id = sb.product_id
-       and pds.store_id = sb.store_id
-       and pds.snapshot_date = sb.sold_date
-
-    left join {{ ref('dim_product') }} p
-        on pds.product_id = p.product_id
-
-    left join {{ ref('dim_supplier') }} sup
-        on p.supplier_id = sup.supplier_id
-
-    left join {{ ref('dim_date') }} d
-        on pds.snapshot_date = d.full_date
+    left join sold_by_store sbs
+        on ci.product_id = sbs.product_id
+       and ci.snapshot_date = sbs.sold_date
 
 ),
 
--- Company-wide daily total purchased quantity, needed as the denominator
--- for Supplier Contribution Percentage
+
+with_product as (
+
+    select
+
+        b.*,
+
+        p.product_key,
+        p.supplier_id,
+        p.cost_price
+
+    from base_with_sales b
+
+    inner join {{ ref('dim_product') }} p
+        on b.product_id = p.product_id
+
+),
+
+
+with_supplier as (
+
+    select
+
+        wp.*,
+
+        sup.supplier_key
+
+    from with_product wp
+
+    left join {{ ref('dim_supplier') }} sup
+        on wp.supplier_id = sup.supplier_id
+
+),
+
+
+with_store as (
+
+    select
+
+        ws.*,
+
+        st.store_key
+
+    from with_supplier ws
+
+    left join {{ ref('dim_store') }} st
+        on ws.store_id = st.store_id
+
+),
+
+
+with_date as (
+
+    select
+
+        wst.*,
+
+        d.date_key
+
+    from with_store wst
+
+    inner join {{ ref('dim_date') }} d
+        on wst.snapshot_date = d.full_date
+
+),
+
+
 daily_total_purchased as (
 
     select
         snapshot_date,
         sum(purchased_quantity) as total_purchased_quantity_all_products
-
     from company_inventory
     group by snapshot_date
 
@@ -136,9 +142,8 @@ daily_supplier_purchased as (
         ci.snapshot_date,
         p.supplier_id,
         sum(ci.purchased_quantity) as supplier_purchased_quantity
-
     from company_inventory ci
-    left join {{ ref('dim_product') }} p
+    inner join {{ ref('dim_product') }} p
         on ci.product_id = p.product_id
     group by ci.snapshot_date, p.supplier_id
 
@@ -147,25 +152,25 @@ daily_supplier_purchased as (
 select
 
     row_number() over (
-        order by j.product_key, j.store_key, j.date_key
+        order by wd.product_key, wd.store_key, wd.date_key
     ) as inventory_key,
 
-    j.product_key,
-    j.store_key,
-    j.supplier_key,
-    j.date_key,
+    wd.product_key,
+    wd.store_key,
+    wd.supplier_key,
+    wd.date_key,
 
-    j.beginning_stock,
-    j.purchased_quantity,
-    j.sold_quantity,
-    j.ending_stock,
+    wd.beginning_stock,
+    wd.purchased_quantity,
+    wd.sold_quantity,
+    wd.ending_stock,
 
-    round(j.ending_stock * j.cost_price, 2) as inventory_value,
+    round(wd.ending_stock * wd.cost_price, 2) as inventory_value,
 
     round(
         case
-            when (j.beginning_stock + j.ending_stock) / 2 > 0
-            then j.sold_quantity / ((j.beginning_stock + j.ending_stock) / 2.0)
+            when (wd.beginning_stock + wd.ending_stock) / 2 > 0
+            then wd.sold_quantity / ((wd.beginning_stock + wd.ending_stock) / 2.0)
             else null
         end,
         4
@@ -180,15 +185,15 @@ select
         2
     ) as supplier_contribution_percentage,
 
-    j.low_stock_flag,
-    j.stale_snapshot_flag,
-    j.negative_balance_flag
+    wd.low_stock_flag,
+    wd.stale_snapshot_flag,
+    wd.negative_balance_flag
 
-from joined j
+from with_date wd
 
 left join daily_total_purchased dtp
-    on j.snapshot_date = dtp.snapshot_date
+    on wd.snapshot_date = dtp.snapshot_date
 
 left join daily_supplier_purchased dsp
-    on j.snapshot_date = dsp.snapshot_date
-   and j.supplier_id = dsp.supplier_id
+    on wd.snapshot_date = dsp.snapshot_date
+   and wd.supplier_id = dsp.supplier_id
